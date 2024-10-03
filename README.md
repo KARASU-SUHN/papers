@@ -21,3 +21,15 @@ For your research on materials image processing, especially focusing on microstr
 4. **"Recent Advances in Deep Learning Methods for Materials Science"**: This review focuses on how deep learning, particularly CNNs and other neural network-based models, is used in materials science for various image-based tasks like structure-property relationship modeling and microstructure feature extraction.
 https://link.springer.com/article/10.1007/s11661-020-06008-4
 https://ar5iv.labs.arxiv.org/html/2110.14820
+
+ICMSN 2025
+https://www.icmsn.org/
+
+AMSE 2025
+https://amse.net/index.html
+
+ICSMR2025
+https://www.icsmr.org/
+
+ICMIM 2025
+https://www.icmim.org/

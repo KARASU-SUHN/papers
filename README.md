@@ -33,3 +33,14 @@ https://www.icsmr.org/
 
 ICMIM 2025
 https://www.icmim.org/
+
+ICMVA 2025
+https://icmva.org/index.html    -Deep Learning (applications of deep learning to real problems)
+
+AIAI 2025 https://ifipaiai.org/2025/  -Engineering and Industry
+
+
+ICCIA 2025 https://www.iccai.net/index.html    -Signal, image and speech processing, Artificial intelligence tools & applications (Nov. TBD)
+
+IWPR 2025 https://www.icopr.org/index.html   -Deep Learning
+

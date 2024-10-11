@@ -104,3 +104,14 @@ https://www.livescience.com/technology/artificial-intelligence/deepminds-ai-prog
 https://www.nature.com/articles/d41586-024-01555-x
 
 https://www.drugdiscoverytrends.com/meet-alphafold-3-which-can-accurately-model-more-than-99-of-molecular-types-in-the-protein-data-bank/
+
+
+To provide you with a useful summary of each of the three patents, I recommend reviewing each of their key points:
+
+1. **US20210304847A1**: This patent focuses on using machine learning to predict protein structures by processing amino acid sequences and determining the corresponding protein folding or 3D structures. It involves advanced neural network techniques optimized for biological data, such as protein sequences.
+
+2. **US20210313008A1**: This patent also deals with machine learning for protein structure prediction, emphasizing the use of neural networks to analyze amino acid sequences and predict inter-residue distances and angles to improve the accuracy of protein folding predictions.
+
+3. **US20210407625A1**: This patent introduces a machine learning-based method specifically designed to predict protein-ligand binding affinities. It models protein structures and their interactions with other molecules, such as small ligands, to assist in drug discovery and development.
+
+Each patent builds on machine learning technologies, but they target slightly different aspects of protein analysis: structural prediction, distance mapping, and binding interactions.

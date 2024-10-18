@@ -1,3 +1,4 @@
+
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
@@ -6,8 +7,9 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.neural_network import MLPClassifier
-from sklearn.model_selection import cross_val_score, KFold
 from xgboost import XGBClassifier
+from sklearn.model_selection import cross_val_predict, KFold
+from sklearn.metrics import roc_auc_score
 
 # Assuming X_train, y_train, X_valid, y_valid, X_test are already defined
 
@@ -16,7 +18,7 @@ classifiers = {
     'Logistic Regression': LogisticRegression(max_iter=1000),
     'Decision Tree': DecisionTreeClassifier(),
     'K Neighbors': KNeighborsClassifier(),
-    'SVC': SVC(),
+    'SVC': SVC(probability=True),  # Enable probability output for SVC
     'Random Forest': RandomForestClassifier(),
     'Gradient Boosting': GradientBoostingClassifier(),
     'MLP': MLPClassifier(max_iter=1000),
@@ -31,6 +33,24 @@ results = {}
 
 # Perform k-fold cross-validation for each classifier
 for name, clf in classifiers.items():
-    scores = cross_val_score(clf, X_train, y_train, cv=kf, scoring='accuracy')
-    results[name] = scores
-    print(f"{name}: {np.mean(scores):.4f} ± {np.std(scores):.4f}")
+    # Predict probabilities using cross_val_predict with method="predict_proba"
+    preds = cross_val_predict(clf, X_train, y_train, cv=kf, method="predict_proba")
+    
+    # Compute ROC AUC score using the second column (positive class probabilities)
+    roc_auc = roc_auc_score(y_train, preds[:, 1])
+    
+    results[name] = roc_auc
+    print(f"{name}: ROC AUC = {roc_auc:.4f}")
+
+# Train the best model and validate on the validation set (X_valid, y_valid)
+for name, clf in classifiers.items():
+    # Fit the classifier
+    clf.fit(X_train, y_train)
+    
+    # Predict probabilities for the validation set
+    preds_valid = clf.predict_proba(X_valid)
+    
+    # Compute the ROC AUC score for the validation set
+    roc_auc_valid = roc_auc_score(y_valid, preds_valid[:, 1])
+    
+    print(f"Validation ROC AUC for {name}: {roc_auc_valid:.4f}")

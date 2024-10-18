@@ -308,38 +308,50 @@ param_grids = {
     }
 }
 
-# Step 4: Define a function to perform RandomizedSearchCV for each model
-def tune_model(clf, param_grid, X_train, y_train):
+# Step 4: Define a function to perform RandomizedSearchCV for each model and save results
+def tune_model(clf, param_grid, X_train, y_train, model_name, result_file):
     search = RandomizedSearchCV(clf, param_grid, n_iter=10, cv=5, scoring='roc_auc', verbose=1, random_state=42)
     search.fit(X_train, y_train)
-    print(f"Best parameters for {type(clf).__name__}: {search.best_params_}")
-    print(f"Best score: {search.best_score_}")
+    
+    # Write the results to the text file
+    with open(result_file, 'a') as f:
+        f.write(f"\nModel: {model_name}\n")
+        f.write(f"Best parameters: {search.best_params_}\n")
+        f.write(f"Best cross-validation ROC AUC score: {search.best_score_:.4f}\n\n")
+    
     return search.best_estimator_
 
-# Step 5: Tune each model using RandomizedSearchCV and print the best parameters
+# Step 5: Tune each model using RandomizedSearchCV and save the best parameters
+result_file = "model_results.txt"
 best_estimators = {}
 for name, clf in classifiers.items():
     print(f"Tuning {name}...")
     if name in ['Logistic Regression', 'K Neighbors', 'SVC', 'MLP']:
         # Use scaled data for non-tree-based models
-        best_estimators[name] = tune_model(clf, param_grids[name], X_train_scaled, y_train)
+        best_estimators[name] = tune_model(clf, param_grids[name], X_train_scaled, y_train, name, result_file)
     else:
         # Use raw integer data for tree-based models
-        best_estimators[name] = tune_model(clf, param_grids[name], X_train_tree_based, y_train)
+        best_estimators[name] = tune_model(clf, param_grids[name], X_train_tree_based, y_train, name, result_file)
 
-# Step 6: Train the best model and validate on the validation set (example using Random Forest)
-best_model = best_estimators['Random Forest']
-best_model.fit(X_train_tree_based, y_train)
+# Step 6: Evaluate each model on the validation set and save the results to the text file
+with open(result_file, 'a') as f:
+    f.write("Validation Results:\n")
+    
+    for name, model in best_estimators.items():
+        if name in ['Logistic Regression', 'K Neighbors', 'SVC', 'MLP']:
+            preds_valid = model.predict_proba(X_valid_scaled)[:, 1]
+        else:
+            preds_valid = model.predict_proba(X_valid_tree_based)[:, 1]
+        
+        roc_auc_valid = roc_auc_score(y_valid, preds_valid)
+        f.write(f"{name} - Validation ROC AUC: {roc_auc_valid:.4f}\n")
 
-preds_valid = best_model.predict_proba(X_valid_tree_based)[:, 1]
-roc_auc_valid = roc_auc_score(y_valid, preds_valid)
-print(f"Validation ROC AUC: {roc_auc_valid:.4f}")
-
-# Step 7: Predict on X_test and save the results
+# Step 7: Save final test predictions from the best model
+best_model = best_estimators['Random Forest']  # Example using Random Forest
 preds_test = best_model.predict_proba(X_test_tree_based)[:, 1]
 df_submission = pd.DataFrame({"prediction": preds_test})
 df_submission.to_csv("submission.csv", index=False)
 
 print("Submission saved to 'submission.csv'")
-
+print("Model results saved to 'model_results.txt'")
 

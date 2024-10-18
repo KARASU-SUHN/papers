@@ -201,33 +201,38 @@ from sklearn.neural_network import MLPClassifier
 from xgboost import XGBClassifier
 from catboost import CatBoostClassifier
 from lightgbm import LGBMClassifier
-from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit
+from sklearn.model_selection import RandomizedSearchCV
 from sklearn.metrics import roc_auc_score
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 # Assuming X_train, y_train, X_valid, y_valid, X_test are already defined
-# Skip the datetime handling as requested
 
-# Step 1: One-Hot Encoding for categorical variables
-categorical_columns = ["line", "tray_no", "position", "maintenance_count"]
+# Categorical columns
+categorical_columns = ["line", "tray_no", "position"]
+
+# Initialize the OneHotEncoder for non-tree-based models
 encoder = OneHotEncoder(drop='first', sparse_output=False, handle_unknown='ignore')
 
-# Fit and transform the categorical columns
+# Fit and transform the categorical columns for non-tree-based models
 X_train_encoded = encoder.fit_transform(X_train[categorical_columns])
 X_valid_encoded = encoder.transform(X_valid[categorical_columns])
 X_test_encoded = encoder.transform(X_test[categorical_columns])
 
-# Combine encoded categorical data with other features
+# Combine the encoded categorical data with the continuous features (including maintenance_count)
 X_train_combined = np.hstack((X_train.drop(columns=categorical_columns).values, X_train_encoded))
 X_valid_combined = np.hstack((X_valid.drop(columns=categorical_columns).values, X_valid_encoded))
 X_test_combined = np.hstack((X_test.drop(columns=categorical_columns).values, X_test_encoded))
 
-# Step 2: Scaling for models that require it (LogisticRegression, SVC, etc.)
+# Scale the data for non-tree-based models
 scaler = StandardScaler()
-
 X_train_scaled = scaler.fit_transform(X_train_combined)
 X_valid_scaled = scaler.transform(X_valid_combined)
 X_test_scaled = scaler.transform(X_test_combined)
+
+# Use tree-based models directly with raw data (including maintenance_count as is)
+X_train_tree_based = X_train.drop(columns=categorical_columns).values  # raw integer data for tree-based models
+X_valid_tree_based = X_valid.drop(columns=categorical_columns).values
+X_test_tree_based = X_test.drop(columns=categorical_columns).values
 
 # Step 3: Create a dictionary of models and their parameter grids for RandomizedSearchCV
 classifiers = {
@@ -316,20 +321,22 @@ best_estimators = {}
 for name, clf in classifiers.items():
     print(f"Tuning {name}...")
     if name in ['Logistic Regression', 'K Neighbors', 'SVC', 'MLP']:
+        # Use scaled data for non-tree-based models
         best_estimators[name] = tune_model(clf, param_grids[name], X_train_scaled, y_train)
     else:
-        best_estimators[name] = tune_model(clf, param_grids[name], X_train_combined, y_train)
+        # Use raw integer data for tree-based models
+        best_estimators[name] = tune_model(clf, param_grids[name], X_train_tree_based, y_train)
 
-# Step 6: Train the best model and validate on the validation set (as an example with Random Forest)
+# Step 6: Train the best model and validate on the validation set (example using Random Forest)
 best_model = best_estimators['Random Forest']
-best_model.fit(X_train_combined, y_train)
+best_model.fit(X_train_tree_based, y_train)
 
-preds_valid = best_model.predict_proba(X_valid_combined)[:, 1]
+preds_valid = best_model.predict_proba(X_valid_tree_based)[:, 1]
 roc_auc_valid = roc_auc_score(y_valid, preds_valid)
 print(f"Validation ROC AUC: {roc_auc_valid:.4f}")
 
 # Step 7: Predict on X_test and save the results
-preds_test = best_model.predict_proba(X_test_combined)[:, 1]
+preds_test = best_model.predict_proba(X_test_tree_based)[:, 1]
 df_submission = pd.DataFrame({"prediction": preds_test})
 df_submission.to_csv("submission.csv", index=False)
 

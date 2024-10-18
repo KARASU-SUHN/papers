@@ -189,7 +189,6 @@ df_submission.to_csv("submission.csv", index=False)
 
 print("\nSubmission file 'submission.csv' has been saved.")
 
-
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
@@ -334,6 +333,9 @@ for name, clf in classifiers.items():
         best_estimators[name] = tune_model(clf, param_grids[name], X_train_tree_based, y_train, name, result_file)
 
 # Step 6: Evaluate each model on the validation set and save the results to the text file
+best_model_name = None
+best_roc_auc = 0
+
 with open(result_file, 'a') as f:
     f.write("Validation Results:\n")
     
@@ -345,13 +347,27 @@ with open(result_file, 'a') as f:
         
         roc_auc_valid = roc_auc_score(y_valid, preds_valid)
         f.write(f"{name} - Validation ROC AUC: {roc_auc_valid:.4f}\n")
+        
+        # Keep track of the best model
+        if roc_auc_valid > best_roc_auc:
+            best_roc_auc = roc_auc_valid
+            best_model_name = name
 
 # Step 7: Save final test predictions from the best model
-best_model = best_estimators['Random Forest']  # Example using Random Forest
-preds_test = best_model.predict_proba(X_test_tree_based)[:, 1]
+best_model = best_estimators[best_model_name]
+if best_model_name in ['Logistic Regression', 'K Neighbors', 'SVC', 'MLP']:
+    preds_test = best_model.predict_proba(X_test_scaled)[:, 1]
+else:
+    preds_test = best_model.predict_proba(X_test_tree_based)[:, 1]
+
 df_submission = pd.DataFrame({"prediction": preds_test})
 df_submission.to_csv("submission.csv", index=False)
 
+# Log the best model in the result file
+with open(result_file, 'a') as f:
+    f.write(f"\nBest model selected: {best_model_name} with ROC AUC: {best_roc_auc:.4f}\n")
+
 print("Submission saved to 'submission.csv'")
+print(f"Best model: {best_model_name} with ROC AUC: {best_roc_auc:.4f}")
 print("Model results saved to 'model_results.txt'")
 

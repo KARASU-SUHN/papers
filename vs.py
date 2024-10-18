@@ -189,3 +189,150 @@ df_submission.to_csv("submission.csv", index=False)
 
 print("\nSubmission file 'submission.csv' has been saved.")
 
+
+import numpy as np
+import pandas as pd
+from sklearn.linear_model import LogisticRegression
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.svm import SVC
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.neural_network import MLPClassifier
+from xgboost import XGBClassifier
+from catboost import CatBoostClassifier
+from lightgbm import LGBMClassifier
+from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit
+from sklearn.metrics import roc_auc_score
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+# Assuming X_train, y_train, X_valid, y_valid, X_test are already defined
+# Skip the datetime handling as requested
+
+# Step 1: One-Hot Encoding for categorical variables
+categorical_columns = ["line", "tray_no", "position", "maintenance_count"]
+encoder = OneHotEncoder(drop='first', sparse_output=False, handle_unknown='ignore')
+
+# Fit and transform the categorical columns
+X_train_encoded = encoder.fit_transform(X_train[categorical_columns])
+X_valid_encoded = encoder.transform(X_valid[categorical_columns])
+X_test_encoded = encoder.transform(X_test[categorical_columns])
+
+# Combine encoded categorical data with other features
+X_train_combined = np.hstack((X_train.drop(columns=categorical_columns).values, X_train_encoded))
+X_valid_combined = np.hstack((X_valid.drop(columns=categorical_columns).values, X_valid_encoded))
+X_test_combined = np.hstack((X_test.drop(columns=categorical_columns).values, X_test_encoded))
+
+# Step 2: Scaling for models that require it (LogisticRegression, SVC, etc.)
+scaler = StandardScaler()
+
+X_train_scaled = scaler.fit_transform(X_train_combined)
+X_valid_scaled = scaler.transform(X_valid_combined)
+X_test_scaled = scaler.transform(X_test_combined)
+
+# Step 3: Create a dictionary of models and their parameter grids for RandomizedSearchCV
+classifiers = {
+    'Logistic Regression': LogisticRegression(max_iter=1000),
+    'Decision Tree': DecisionTreeClassifier(),
+    'K Neighbors': KNeighborsClassifier(),
+    'SVC': SVC(probability=True),  # Enable probability output for SVC
+    'Random Forest': RandomForestClassifier(),
+    'Gradient Boosting': GradientBoostingClassifier(),
+    'MLP': MLPClassifier(max_iter=1000),
+    'XGB': XGBClassifier(eval_metric='mlogloss'),
+    'CatBoost': CatBoostClassifier(verbose=0),
+    'LightGBM': LGBMClassifier()
+}
+
+# Parameter grids for each model
+param_grids = {
+    'Logistic Regression': {
+        'C': [0.01, 0.1, 1, 10, 100],
+        'solver': ['liblinear', 'lbfgs']
+    },
+    'Decision Tree': {
+        'max_depth': [3, 5, 10, None],
+        'min_samples_split': [2, 5, 10],
+        'min_samples_leaf': [1, 2, 4]
+    },
+    'K Neighbors': {
+        'n_neighbors': [3, 5, 7, 9],
+        'weights': ['uniform', 'distance'],
+        'metric': ['euclidean', 'manhattan']
+    },
+    'SVC': {
+        'C': [0.1, 1, 10],
+        'kernel': ['linear', 'rbf'],
+        'gamma': ['scale', 'auto']
+    },
+    'Random Forest': {
+        'n_estimators': [100, 200, 500],
+        'max_depth': [10, 20, 30, None],
+        'min_samples_split': [2, 5, 10],
+        'min_samples_leaf': [1, 2, 4]
+    },
+    'Gradient Boosting': {
+        'n_estimators': [100, 200, 500],
+        'learning_rate': [0.01, 0.1, 0.05],
+        'max_depth': [3, 5, 7]
+    },
+    'MLP': {
+        'hidden_layer_sizes': [(50, 50), (100,), (100, 100)],
+        'activation': ['relu', 'tanh'],
+        'solver': ['adam', 'sgd'],
+        'alpha': [0.0001, 0.001, 0.01]
+    },
+    'XGB': {
+        'n_estimators': [100, 200, 500],
+        'learning_rate': [0.01, 0.1, 0.05],
+        'max_depth': [3, 5, 7],
+        'subsample': [0.8, 1.0],
+        'colsample_bytree': [0.8, 1.0]
+    },
+    'CatBoost': {
+        'iterations': [100, 200, 500],
+        'learning_rate': [0.01, 0.1, 0.05],
+        'depth': [3, 5, 7],
+        'l2_leaf_reg': [1, 3, 5]
+    },
+    'LightGBM': {
+        'n_estimators': [100, 200, 500],
+        'learning_rate': [0.01, 0.1, 0.05],
+        'num_leaves': [31, 50, 100],
+        'max_depth': [-1, 10, 20],
+        'min_child_samples': [20, 50, 100]
+    }
+}
+
+# Step 4: Define a function to perform RandomizedSearchCV for each model
+def tune_model(clf, param_grid, X_train, y_train):
+    search = RandomizedSearchCV(clf, param_grid, n_iter=10, cv=5, scoring='roc_auc', verbose=1, random_state=42)
+    search.fit(X_train, y_train)
+    print(f"Best parameters for {type(clf).__name__}: {search.best_params_}")
+    print(f"Best score: {search.best_score_}")
+    return search.best_estimator_
+
+# Step 5: Tune each model using RandomizedSearchCV and print the best parameters
+best_estimators = {}
+for name, clf in classifiers.items():
+    print(f"Tuning {name}...")
+    if name in ['Logistic Regression', 'K Neighbors', 'SVC', 'MLP']:
+        best_estimators[name] = tune_model(clf, param_grids[name], X_train_scaled, y_train)
+    else:
+        best_estimators[name] = tune_model(clf, param_grids[name], X_train_combined, y_train)
+
+# Step 6: Train the best model and validate on the validation set (as an example with Random Forest)
+best_model = best_estimators['Random Forest']
+best_model.fit(X_train_combined, y_train)
+
+preds_valid = best_model.predict_proba(X_valid_combined)[:, 1]
+roc_auc_valid = roc_auc_score(y_valid, preds_valid)
+print(f"Validation ROC AUC: {roc_auc_valid:.4f}")
+
+# Step 7: Predict on X_test and save the results
+preds_test = best_model.predict_proba(X_test_combined)[:, 1]
+df_submission = pd.DataFrame({"prediction": preds_test})
+df_submission.to_csv("submission.csv", index=False)
+
+print("Submission saved to 'submission.csv'")
+
+

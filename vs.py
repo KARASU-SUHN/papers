@@ -120,10 +120,45 @@ print(f"Calibrated XGBoost ROC AUC: {calibrated_roc_auc:.4f}")
 # ----- 5. SHAP for Interpretation -----
 
 # SHAP explanation for XGBoost
-explainer = shap.Explainer(xgb_search.best_estimator_)
-shap_values = explainer.shap_values(X_train_full)
-shap.summary_plot(shap_values, X_train_full)
+# Define SHAP explanation for the best model (XGBoost, CatBoost, or LightGBM)
+best_model_name = None
+best_model = None
 
+if stacking_roc_auc >= max(calibrated_roc_auc, xgb_search.best_score_, catboost_search.best_score_, lgbm_search.best_score_):
+    best_model_name = 'Stacking Model'
+    best_model = stacking_model
+elif calibrated_roc_auc >= max(stacking_roc_auc, xgb_search.best_score_, catboost_search.best_score_, lgbm_search.best_score_):
+    best_model_name = 'Calibrated XGBoost'
+    best_model = calibrated_model
+elif xgb_search.best_score_ >= max(catboost_search.best_score_, lgbm_search.best_score_):
+    best_model_name = 'XGBoost'
+    best_model = xgb_search.best_estimator_
+elif catboost_search.best_score_ >= max(xgb_search.best_score_, lgbm_search.best_score_):
+    best_model_name = 'CatBoost'
+    best_model = catboost_search.best_estimator_
+else:
+    best_model_name = 'LightGBM'
+    best_model = lgbm_search.best_estimator_
+
+# Print which model was selected as the best
+print(f"The best model is: {best_model_name}")
+
+# Create a SHAP explainer for the best model
+if best_model_name in ['XGBoost', 'LightGBM']:
+    explainer = shap.Explainer(best_model)
+    shap_values = explainer(X_train_full)
+elif best_model_name == 'CatBoost':
+    explainer = shap.TreeExplainer(best_model)
+    shap_values = explainer.shap_values(X_train_full)
+
+# Generate SHAP summary plot
+plt.figure()
+shap.summary_plot(shap_values, X_train_full, show=False)  # Use show=False to suppress immediate display
+plt.title(f"SHAP Summary for {best_model_name}")
+plt.savefig(f"shap_summary_{best_model_name}.png", bbox_inches='tight')
+plt.close()
+
+print(f"SHAP summary plot saved as 'shap_summary_{best_model_name}.png'")
 # ----- 6. Predictions on Test Data -----
 
 # Make predictions on the test set using the stacking model

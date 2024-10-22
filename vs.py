@@ -39,25 +39,32 @@ X_train_full, X_valid, y_train_full, y_valid = train_test_split(X_train, y_train
 # Define parameter grids for XGBoost, CatBoost, and LightGBM
 param_grids = {
     'XGB': {
-        'n_estimators': [500, 1000],
-        'learning_rate': [0.01, 0.05, 0.1],
-        'max_depth': [3, 5, 7],
-        'subsample': [0.8, 1.0],
-        'colsample_bytree': [0.8, 1.0],
-        'lambda': [1, 3, 5]
+        'n_estimators': [500, 1000, 1500],
+        'learning_rate': [0.001, 0.01, 0.05, 0.1],
+        'max_depth': [3, 4, 5, 6, 8],
+        'subsample': [0.6, 0.8, 1.0],
+        'colsample_bytree': [0.6, 0.8, 1.0],
+        'gamma': [0, 0.1, 0.5],
+        'lambda': [1, 3, 5, 10],
+        'alpha': [0, 1, 3]
     },
     'CatBoost': {
-        'iterations': [500, 1000],
+        'iterations': [500, 1000, 2000],
         'learning_rate': [0.01, 0.05, 0.1],
-        'depth': [3, 5, 7],
-        'l2_leaf_reg': [1, 3, 5]
+        'depth': [3, 5, 7, 9],
+        'l2_leaf_reg': [1, 3, 5, 10],
+        'border_count': [128, 254, 512]
     },
     'LightGBM': {
-        'n_estimators': [500, 1000],
-        'learning_rate': [0.01, 0.05, 0.1],
-        'num_leaves': [31, 50, 100],
-        'max_depth': [-1, 10, 20],
-        'min_child_samples': [20, 50, 100]
+        'n_estimators': [500, 1000, 2000],
+        'learning_rate': [0.001, 0.01, 0.05, 0.1],
+        'num_leaves': [31, 50, 100, 200],
+        'max_depth': [-1, 10, 20, 30],
+        'min_child_samples': [20, 50, 100],
+        'subsample': [0.6, 0.8, 1.0],
+        'colsample_bytree': [0.6, 0.8, 1.0],
+        'reg_alpha': [0, 1, 3, 5],
+        'reg_lambda': [0, 1, 3, 5]
     }
 }
 

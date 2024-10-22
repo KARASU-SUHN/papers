@@ -118,47 +118,67 @@ calibrated_roc_auc = roc_auc_score(y_valid, calibrated_preds)
 print(f"Calibrated XGBoost ROC AUC: {calibrated_roc_auc:.4f}")
 
 # ----- 5. SHAP for Interpretation -----
+with open('training_results.txt', 'w') as result_file:
+    result_file.write("Model Training and Evaluation Results\n")
+    result_file.write("=====================================\n")
 
-# SHAP explanation for XGBoost
-# Define SHAP explanation for the best model (XGBoost, CatBoost, or LightGBM)
-best_model_name = None
-best_model = None
+    # ----- 5. SHAP for Interpretation -----
 
-if stacking_roc_auc >= max(calibrated_roc_auc, xgb_search.best_score_, catboost_search.best_score_, lgbm_search.best_score_):
-    best_model_name = 'Stacking Model'
-    best_model = stacking_model
-elif calibrated_roc_auc >= max(stacking_roc_auc, xgb_search.best_score_, catboost_search.best_score_, lgbm_search.best_score_):
-    best_model_name = 'Calibrated XGBoost'
-    best_model = calibrated_model
-elif xgb_search.best_score_ >= max(catboost_search.best_score_, lgbm_search.best_score_):
-    best_model_name = 'XGBoost'
-    best_model = xgb_search.best_estimator_
-elif catboost_search.best_score_ >= max(xgb_search.best_score_, lgbm_search.best_score_):
-    best_model_name = 'CatBoost'
-    best_model = catboost_search.best_estimator_
-else:
-    best_model_name = 'LightGBM'
-    best_model = lgbm_search.best_estimator_
+    # Define SHAP explanation for the best model (XGBoost, CatBoost, or LightGBM)
+    best_model_name = None
+    best_model = None
 
-# Print which model was selected as the best
-print(f"The best model is: {best_model_name}")
+    if stacking_roc_auc >= max(calibrated_roc_auc, xgb_search.best_score_, catboost_search.best_score_, lgbm_search.best_score_):
+        best_model_name = 'Stacking Model'
+        best_model = stacking_model
+    elif calibrated_roc_auc >= max(stacking_roc_auc, xgb_search.best_score_, catboost_search.best_score_, lgbm_search.best_score_):
+        best_model_name = 'Calibrated XGBoost'
+        best_model = calibrated_model
+    elif xgb_search.best_score_ >= max(catboost_search.best_score_, lgbm_search.best_score_):
+        best_model_name = 'XGBoost'
+        best_model = xgb_search.best_estimator_
+    elif catboost_search.best_score_ >= max(xgb_search.best_score_, lgbm_search.best_score_):
+        best_model_name = 'CatBoost'
+        best_model = catboost_search.best_estimator_
+    else:
+        best_model_name = 'LightGBM'
+        best_model = lgbm_search.best_estimator_
 
-# Create a SHAP explainer for the best model
-if best_model_name in ['XGBoost', 'LightGBM']:
-    explainer = shap.Explainer(best_model)
-    shap_values = explainer(X_train_full)
-elif best_model_name == 'CatBoost':
-    explainer = shap.TreeExplainer(best_model)
-    shap_values = explainer.shap_values(X_train_full)
+    # Print and save which model was selected as the best
+    result_file.write(f"The best model is: {best_model_name}\n")
+    print(f"The best model is: {best_model_name}")
 
-# Generate SHAP summary plot
-plt.figure()
-shap.summary_plot(shap_values, X_train_full, show=False)  # Use show=False to suppress immediate display
-plt.title(f"SHAP Summary for {best_model_name}")
-plt.savefig(f"shap_summary_{best_model_name}.png", bbox_inches='tight')
-plt.close()
+    # Create a SHAP explainer for the best model
+    if best_model_name in ['XGBoost', 'LightGBM']:
+        explainer = shap.Explainer(best_model)
+        shap_values = explainer(X_train_full)
+    elif best_model_name == 'CatBoost':
+        explainer = shap.TreeExplainer(best_model)
+        shap_values = explainer.shap_values(X_train_full)
 
-print(f"SHAP summary plot saved as 'shap_summary_{best_model_name}.png'")
+    # Generate SHAP summary plot and save it
+    plt.figure()
+    shap.summary_plot(shap_values, X_train_full, show=False)  # Use show=False to suppress immediate display
+    plt.title(f"SHAP Summary for {best_model_name}")
+    shap_plot_filename = f"shap_summary_{best_model_name}.png"
+    plt.savefig(shap_plot_filename, bbox_inches='tight')
+    plt.close()  # Close the figure to avoid displaying in environments where it's not needed
+    result_file.write(f"SHAP summary plot saved as '{shap_plot_filename}'\n")
+    print(f"SHAP summary plot saved as '{shap_plot_filename}'")
+
+    # Save the model performance details in the file
+    result_file.write("\nModel Performance Metrics\n")
+    result_file.write("--------------------------\n")
+    result_file.write(f"Stacking Model ROC AUC: {stacking_roc_auc:.4f}\n")
+    result_file.write(f"Calibrated XGBoost ROC AUC: {calibrated_roc_auc:.4f}\n")
+    result_file.write(f"Best XGBoost ROC AUC: {xgb_search.best_score_:.4f}\n")
+    result_file.write(f"Best CatBoost ROC AUC: {catboost_search.best_score_:.4f}\n")
+    result_file.write(f"Best LightGBM ROC AUC: {lgbm_search.best_score_:.4f}\n")
+    result_file.write("\n")
+
+    print("Training results saved in 'training_results.txt'")
+
+
 # ----- 6. Predictions on Test Data -----
 
 # Make predictions on the test set using the stacking model

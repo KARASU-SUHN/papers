@@ -1,5 +1,141 @@
 import numpy as np
 import pandas as pd
+from sklearn.linear_model import LogisticRegression
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.neural_network import MLPClassifier
+from xgboost import XGBClassifier
+from catboost import CatBoostClassifier
+from lightgbm import LGBMClassifier
+from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold
+from sklearn.metrics import roc_auc_score
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+import shap
+import matplotlib.pyplot as plt
+
+# Assuming X_train, y_train, X_test are already defined
+categorical_columns = ['line', 'tray_no', 'position']  # Categorical features
+
+# ----- 1. Feature Engineering based on Feature Importance -----
+
+# Keep the maintenance_count feature in the dataset
+# Feature Engineering: Interaction terms and new features
+X_train['pressure_position_interaction'] = X_train['pressure'] * X_train['position']
+X_test['pressure_position_interaction'] = X_test['pressure'] * X_test['position']
+
+X_train['pressure_temperature_interaction'] = X_train['pressure'] * X_train[['temperature_1', 'temperature_2', 'temperature_3']].mean(axis=1)
+X_test['pressure_temperature_interaction'] = X_test['pressure'] * X_test[['temperature_1', 'temperature_2', 'temperature_3']].mean(axis=1)
+
+X_train['avg_temperature'] = X_train[['temperature_1', 'temperature_2', 'temperature_3']].mean(axis=1)
+X_test['avg_temperature'] = X_test[['temperature_1', 'temperature_2', 'temperature_3']].mean(axis=1)
+
+# ----- 2. Categorical Variable Handling -----
+# For non-tree-based models (like Logistic Regression, KNeighbors, MLPClassifier), use OneHotEncoder
+encoder = OneHotEncoder(drop='first', sparse_output=False, handle_unknown='ignore')
+
+# Encode categorical columns for non-tree-based models
+X_train_encoded = encoder.fit_transform(X_train[categorical_columns])
+X_test_encoded = encoder.transform(X_test[categorical_columns])
+
+# Combine encoded categorical data with continuous features
+X_train_combined = np.hstack((X_train.drop(columns=categorical_columns).values, X_train_encoded))
+X_test_combined = np.hstack((X_test.drop(columns=categorical_columns).values, X_test_encoded))
+
+# Scale the data for non-tree-based models
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train_combined)
+X_test_scaled = scaler.transform(X_test_combined)
+
+# Tree-based models like XGBoost, CatBoost, and LightGBM handle raw integer categorical variables natively
+X_train_tree_based = X_train.drop(columns=categorical_columns).values
+X_test_tree_based = X_test.drop(columns=categorical_columns).values
+
+# ----- 3. Model Training and Hyperparameter Tuning -----
+
+# Define the parameter grids for RandomizedSearchCV
+param_grids = {
+    'XGB': {
+        'n_estimators': [500, 1000, 1500],
+        'learning_rate': [0.01, 0.05, 0.1],
+        'max_depth': [3, 5, 7],
+        'subsample': [0.8, 1.0],
+        'colsample_bytree': [0.8, 1.0]
+    },
+    'CatBoost': {
+        'iterations': [500, 1000],
+        'learning_rate': [0.01, 0.05, 0.1],
+        'depth': [3, 5, 7],
+        'l2_leaf_reg': [1, 3, 5]
+    },
+    'LightGBM': {
+        'n_estimators': [500, 1000],
+        'learning_rate': [0.01, 0.05, 0.1],
+        'num_leaves': [31, 50, 100],
+        'max_depth': [-1, 10, 20]
+    }
+}
+
+# Initialize models
+xgb_model = XGBClassifier(eval_metric='auc', use_label_encoder=False)
+catboost_model = CatBoostClassifier(verbose=0)
+lgbm_model = LGBMClassifier()
+
+# Stratified KFold for cross-validation
+skf = StratifiedKFold(n_splits=5)
+
+# Tune XGBoost
+xgb_search = RandomizedSearchCV(xgb_model, param_distributions=param_grids['XGB'], n_iter=10, cv=skf, scoring='roc_auc', random_state=42)
+xgb_search.fit(X_train_tree_based, y_train)
+print(f"Best XGBoost ROC AUC: {xgb_search.best_score_:.4f}")
+
+# Tune CatBoost
+catboost_search = RandomizedSearchCV(catboost_model, param_distributions=param_grids['CatBoost'], n_iter=10, cv=skf, scoring='roc_auc', random_state=42)
+catboost_search.fit(X_train_tree_based, y_train)
+print(f"Best CatBoost ROC AUC: {catboost_search.best_score_:.4f}")
+
+# Tune LightGBM
+lgbm_search = RandomizedSearchCV(lgbm_model, param_distributions=param_grids['LightGBM'], n_iter=10, cv=skf, scoring='roc_auc', random_state=42)
+lgbm_search.fit(X_train_tree_based, y_train)
+print(f"Best LightGBM ROC AUC: {lgbm_search.best_score_:.4f}")
+
+# ----- 4. SHAP Interpretation for the Best Model -----
+
+# Choose the best model based on ROC AUC
+best_model_name = 'XGBoost' if xgb_search.best_score_ >= max(catboost_search.best_score_, lgbm_search.best_score_) else 'CatBoost' if catboost_search.best_score_ >= lgbm_search.best_score_ else 'LightGBM'
+best_model = xgb_search.best_estimator_ if best_model_name == 'XGBoost' else catboost_search.best_estimator_ if best_model_name == 'CatBoost' else lgbm_search.best_estimator_
+
+# Print the best model
+print(f"Best model is: {best_model_name}")
+
+# SHAP explanation for the best model
+if best_model_name in ['XGBoost', 'LightGBM']:
+    explainer = shap.Explainer(best_model)
+    shap_values = explainer(X_train_tree_based)
+elif best_model_name == 'CatBoost':
+    explainer = shap.TreeExplainer(best_model)
+    shap_values = explainer.shap_values(X_train_tree_based)
+
+# Generate SHAP summary plot
+plt.figure()
+shap.summary_plot(shap_values, X_train_tree_based, show=False)
+shap_plot_filename = f"shap_summary_{best_model_name}.png"
+plt.savefig(shap_plot_filename, bbox_inches='tight')
+plt.close()
+print(f"SHAP summary plot saved as '{shap_plot_filename}'")
+
+# ----- 5. Predictions on Test Data -----
+
+# Make predictions on the test set using the best model
+test_preds = best_model.predict_proba(X_test_tree_based)[:, 1]
+df_submission = pd.DataFrame({"prediction": test_preds})
+df_submission.to_csv("submission.csv", index=False)
+
+print("Submission saved to 'submission.csv'")
+
+
+import numpy as np
+import pandas as pd
 from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold, train_test_split
 from sklearn.metrics import roc_auc_score
 from sklearn.preprocessing import OneHotEncoder, StandardScaler

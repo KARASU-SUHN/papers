@@ -1,193 +1,132 @@
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LogisticRegression
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.svm import SVC
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.neural_network import MLPClassifier
-from xgboost import XGBClassifier
-from catboost import CatBoostClassifier
-from lightgbm import LGBMClassifier
-from sklearn.model_selection import cross_val_predict, KFold
-from sklearn.metrics import roc_auc_score
-from sklearn.preprocessing import OneHotEncoder
-
-# Assuming X_train, y_train, X_valid, y_valid, X_test are already defined
-
-# Step 1: Apply One-Hot Encoding to the categorical variables for models that don't handle them natively
-categorical_columns = ["line", "tray_no", "position", "maintenance_count"]
-encoder = OneHotEncoder(drop='first', sparse=False)
-
-# Fit and transform on training data
-X_train_encoded = encoder.fit_transform(X_train[categorical_columns])
-
-# Apply transformation to the validation and test data
-X_valid_encoded = encoder.transform(X_valid[categorical_columns])
-X_test_encoded = encoder.transform(X_test[categorical_columns])
-
-# Drop original categorical columns and merge with the encoded columns for models that require one-hot encoding
-X_train_oh = np.hstack((X_train.drop(columns=categorical_columns).values, X_train_encoded))
-X_valid_oh = np.hstack((X_valid.drop(columns=categorical_columns).values, X_valid_encoded))
-X_test_oh = np.hstack((X_test.drop(columns=categorical_columns).values, X_test_encoded))
-
-# Step 2: Create a dictionary of classifiers, including CatBoost and LightGBM
-classifiers = {
-    'Logistic Regression': LogisticRegression(max_iter=1000),
-    'Decision Tree': DecisionTreeClassifier(),
-    'K Neighbors': KNeighborsClassifier(),
-    'SVC': SVC(probability=True),  # Enable probability output for SVC
-    'Random Forest': RandomForestClassifier(),
-    'Gradient Boosting': GradientBoostingClassifier(),
-    'MLP': MLPClassifier(max_iter=1000),
-    'XGB': XGBClassifier(eval_metric='mlogloss'),
-    'CatBoost': CatBoostClassifier(verbose=0),  # CatBoost can handle categorical variables directly
-    'LightGBM': LGBMClassifier()  # LightGBM can handle categorical variables directly
-}
-
-# Step 3: Initialize k-fold cross-validation
-kf = KFold(n_splits=5, shuffle=True, random_state=42)
-
-# Store cross-validation results
-results = {}
-
-# Perform k-fold cross-validation for each classifier
-for name, clf in classifiers.items():
-    if name in ['CatBoost', 'LightGBM']:
-        # Use the raw categorical data for CatBoost and LightGBM
-        preds = cross_val_predict(clf, X_train, y_train, cv=kf, method="predict_proba")
-    else:
-        # Use the one-hot encoded data for other classifiers
-        preds = cross_val_predict(clf, X_train_oh, y_train, cv=kf, method="predict_proba")
-    
-    # Compute ROC AUC score using the second column (positive class probabilities)
-    roc_auc = roc_auc_score(y_train, preds[:, 1])
-    
-    results[name] = roc_auc
-    print(f"{name}: ROC AUC = {roc_auc:.4f}")
-
-# Step 4: Train the best model and validate on the validation set (X_valid, y_valid)
-for name, clf in classifiers.items():
-    if name in ['CatBoost', 'LightGBM']:
-        # Use raw categorical data for CatBoost and LightGBM
-        clf.fit(X_train, y_train)
-        preds_valid = clf.predict_proba(X_valid)
-    else:
-        # Use one-hot encoded data for the other models
-        clf.fit(X_train_oh, y_train)
-        preds_valid = clf.predict_proba(X_valid_oh)
-    
-    # Compute the ROC AUC score for the validation set
-    roc_auc_valid = roc_auc_score(y_valid, preds_valid[:, 1])
-    
-    print(f"Validation ROC AUC for {name}: {roc_auc_valid:.4f}")
-
-
-
-import numpy as np
-import pandas as pd
-from sklearn.linear_model import LogisticRegression
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.svm import SVC
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.neural_network import MLPClassifier
-from xgboost import XGBClassifier
-from catboost import CatBoostClassifier
-from lightgbm import LGBMClassifier
-from sklearn.model_selection import cross_val_predict, KFold
+from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold, train_test_split
 from sklearn.metrics import roc_auc_score
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from xgboost import XGBClassifier
+from catboost import CatBoostClassifier
+from lightgbm import LGBMClassifier
+from sklearn.ensemble import StackingClassifier
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.linear_model import LogisticRegression
+import shap
+import matplotlib.pyplot as plt
 
-# Assuming X_train, y_train, X_valid, y_valid, X_test are already defined
+# Assuming X_train, y_train, X_test are already loaded
 
-# Step 1: Apply One-Hot Encoding to the categorical variables for models that don't handle them natively
-categorical_columns = ["line", "tray_no", "position", "maintenance_count"]
-encoder = OneHotEncoder(drop='first', sparse=False)
+# ----- 1. Feature Engineering based on Feature Importance -----
 
-# Fit and transform on training data
-X_train_encoded = encoder.fit_transform(X_train[categorical_columns])
+# Drop less important features
+X_train = X_train.drop(columns=['line', 'maintenance_count'])
+X_test = X_test.drop(columns=['line', 'maintenance_count'])
 
-# Apply transformation to the validation and test data
-X_valid_encoded = encoder.transform(X_valid[categorical_columns])
-X_test_encoded = encoder.transform(X_test[categorical_columns])
+# Interaction terms between pressure and other important features
+X_train['pressure_position_interaction'] = X_train['pressure'] * X_train['position']
+X_test['pressure_position_interaction'] = X_test['pressure'] * X_test['position']
 
-# Drop original categorical columns and merge with the encoded columns for models that require one-hot encoding
-X_train_oh = np.hstack((X_train.drop(columns=categorical_columns).values, X_train_encoded))
-X_valid_oh = np.hstack((X_valid.drop(columns=categorical_columns).values, X_valid_encoded))
-X_test_oh = np.hstack((X_test.drop(columns=categorical_columns).values, X_test_encoded))
+X_train['pressure_temperature_interaction'] = X_train['pressure'] * X_train[['temperature_1', 'temperature_2', 'temperature_3']].mean(axis=1)
+X_test['pressure_temperature_interaction'] = X_test['pressure'] * X_test[['temperature_1', 'temperature_2', 'temperature_3']].mean(axis=1)
 
-# Step 2: Apply StandardScaler for models that need feature scaling
-scaler = StandardScaler()
+# Average temperature
+X_train['avg_temperature'] = X_train[['temperature_1', 'temperature_2', 'temperature_3']].mean(axis=1)
+X_test['avg_temperature'] = X_test[['temperature_1', 'temperature_2', 'temperature_3']].mean(axis=1)
 
-# Scale only for models that are sensitive to feature scaling
-X_train_scaled = scaler.fit_transform(X_train_oh)
-X_valid_scaled = scaler.transform(X_valid_oh)
-X_test_scaled = scaler.transform(X_test_oh)
+# ----- 2. Model Training and Hyperparameter Tuning -----
 
-# Step 3: Create a dictionary of classifiers, including CatBoost and LightGBM
-classifiers = {
-    'Logistic Regression': LogisticRegression(max_iter=1000),
-    'Decision Tree': DecisionTreeClassifier(),
-    'K Neighbors': KNeighborsClassifier(),
-    'SVC': SVC(probability=True),  # Enable probability output for SVC
-    'Random Forest': RandomForestClassifier(),
-    'Gradient Boosting': GradientBoostingClassifier(),
-    'MLP': MLPClassifier(max_iter=1000),
-    'XGB': XGBClassifier(eval_metric='mlogloss'),
-    'CatBoost': CatBoostClassifier(verbose=0),  # CatBoost can handle categorical variables directly
-    'LightGBM': LGBMClassifier()  # LightGBM can handle categorical variables directly
+# Split data for training and validation
+X_train_full, X_valid, y_train_full, y_valid = train_test_split(X_train, y_train, test_size=0.2, stratify=y_train, random_state=42)
+
+# Define parameter grids for XGBoost, CatBoost, and LightGBM
+param_grids = {
+    'XGB': {
+        'n_estimators': [500, 1000],
+        'learning_rate': [0.01, 0.05, 0.1],
+        'max_depth': [3, 5, 7],
+        'subsample': [0.8, 1.0],
+        'colsample_bytree': [0.8, 1.0],
+        'lambda': [1, 3, 5]
+    },
+    'CatBoost': {
+        'iterations': [500, 1000],
+        'learning_rate': [0.01, 0.05, 0.1],
+        'depth': [3, 5, 7],
+        'l2_leaf_reg': [1, 3, 5]
+    },
+    'LightGBM': {
+        'n_estimators': [500, 1000],
+        'learning_rate': [0.01, 0.05, 0.1],
+        'num_leaves': [31, 50, 100],
+        'max_depth': [-1, 10, 20],
+        'min_child_samples': [20, 50, 100]
+    }
 }
 
-# Step 4: Initialize k-fold cross-validation
-kf = KFold(n_splits=5, shuffle=True, random_state=42)
+# Initialize models
+xgb_model = XGBClassifier(eval_metric='auc', use_label_encoder=False)
+catboost_model = CatBoostClassifier(verbose=0)
+lgbm_model = LGBMClassifier()
 
-# Store cross-validation results
-results = {}
-best_model = None
-best_auc = 0
+# StratifiedKFold for cross-validation
+skf = StratifiedKFold(n_splits=5)
 
-# Perform k-fold cross-validation for each classifier
-for name, clf in classifiers.items():
-    if name in ['CatBoost', 'LightGBM', 'Random Forest', 'Decision Tree', 'Gradient Boosting', 'XGB']:
-        # Use the raw categorical data (without scaling) for tree-based models
-        preds = cross_val_predict(clf, X_train, y_train, cv=kf, method="predict_proba")
-    else:
-        # Use the scaled data for models that require scaling
-        preds = cross_val_predict(clf, X_train_scaled, y_train, cv=kf, method="predict_proba")
-    
-    # Compute ROC AUC score using the second column (positive class probabilities)
-    roc_auc = roc_auc_score(y_train, preds[:, 1])
-    
-    results[name] = roc_auc
-    print(f"{name}: ROC AUC = {roc_auc:.4f}")
-    
-    # Track the best model based on ROC AUC
-    if roc_auc > best_auc:
-        best_auc = roc_auc
-        best_model = clf
+# Tune XGBoost
+xgb_search = RandomizedSearchCV(xgb_model, param_distributions=param_grids['XGB'], n_iter=10, cv=skf, scoring='roc_auc', random_state=42)
+xgb_search.fit(X_train_full, y_train_full)
+print(f"Best XGBoost ROC AUC: {xgb_search.best_score_:.4f}")
 
-# Step 5: Train the best model on the entire training set and predict on the test set
-print(f"\nBest model: {type(best_model).__name__} with ROC AUC = {best_auc:.4f}")
+# Tune CatBoost
+catboost_search = RandomizedSearchCV(catboost_model, param_distributions=param_grids['CatBoost'], n_iter=10, cv=skf, scoring='roc_auc', random_state=42)
+catboost_search.fit(X_train_full, y_train_full)
+print(f"Best CatBoost ROC AUC: {catboost_search.best_score_:.4f}")
 
-# Train the best model
-if type(best_model).__name__ in ['CatBoostClassifier', 'LGBMClassifier', 'RandomForestClassifier', 'DecisionTreeClassifier', 'GradientBoostingClassifier', 'XGBClassifier']:
-    # Use the raw data for tree-based models
-    best_model.fit(X_train, y_train)
-    preds_test = best_model.predict_proba(X_test)[:, 1]
-else:
-    # Use the scaled data for models that require scaling
-    best_model.fit(X_train_scaled, y_train)
-    preds_test = best_model.predict_proba(X_test_scaled)[:, 1]
+# Tune LightGBM
+lgbm_search = RandomizedSearchCV(lgbm_model, param_distributions=param_grids['LightGBM'], n_iter=10, cv=skf, scoring='roc_auc', random_state=42)
+lgbm_search.fit(X_train_full, y_train_full)
+print(f"Best LightGBM ROC AUC: {lgbm_search.best_score_:.4f}")
 
-# Step 6: Merge the predictions and save as a CSV
-df_submission = pd.DataFrame()
-df_submission["prediction"] = preds_test
+# ----- 3. Ensembling with Stacking -----
 
-# Save to CSV
+# Use Logistic Regression as the final estimator
+stacking_model = StackingClassifier(
+    estimators=[
+        ('xgb', xgb_search.best_estimator_),
+        ('catboost', catboost_search.best_estimator_),
+        ('lightgbm', lgbm_search.best_estimator_)
+    ],
+    final_estimator=LogisticRegression(),
+    cv=skf
+)
+stacking_model.fit(X_train_full, y_train_full)
+stacking_preds = stacking_model.predict_proba(X_valid)[:, 1]
+stacking_roc_auc = roc_auc_score(y_valid, stacking_preds)
+print(f"Stacking Model ROC AUC: {stacking_roc_auc:.4f}")
+
+# ----- 4. Calibration -----
+
+# Calibrate the best model
+calibrated_model = CalibratedClassifierCV(xgb_search.best_estimator_, method='sigmoid')
+calibrated_model.fit(X_train_full, y_train_full)
+calibrated_preds = calibrated_model.predict_proba(X_valid)[:, 1]
+calibrated_roc_auc = roc_auc_score(y_valid, calibrated_preds)
+print(f"Calibrated XGBoost ROC AUC: {calibrated_roc_auc:.4f}")
+
+# ----- 5. SHAP for Interpretation -----
+
+# SHAP explanation for XGBoost
+explainer = shap.Explainer(xgb_search.best_estimator_)
+shap_values = explainer.shap_values(X_train_full)
+shap.summary_plot(shap_values, X_train_full)
+
+# ----- 6. Predictions on Test Data -----
+
+# Make predictions on the test set using the stacking model
+test_preds = stacking_model.predict_proba(X_test)[:, 1]
+df_submission = pd.DataFrame({"prediction": test_preds})
 df_submission.to_csv("submission.csv", index=False)
 
-print("\nSubmission file 'submission.csv' has been saved.")
+print("Submission saved to 'submission.csv'")
+
+
 
 import numpy as np
 import pandas as pd

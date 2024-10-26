@@ -108,15 +108,6 @@ def get_model(model_cfg):
     return model
 
 
-train
-
-import torch
-from torch.utils.data import DataLoader
-import numpy as np
-from tqdm import tqdm
-from dllib.config import trainer_cfg, model_cfg
-from dllib.domain.model import get_model
-from dllib.utils import get_dataset, get_dataloader, Logger
 
 class MultiModelTrainer:
     def __init__(self, trainer_cfg, logger):
@@ -259,10 +250,10 @@ class model_cfg:
     pre_train: bool = True
     in_chans: int = 1
     out_dim: int = 3
-    n_estimators: int = 100  # For RandomForest and XGBoost
-    input_size: int = 128  # For MLP
-    hidden_size: int = 64  # For MLP
-    output_size: int = 3  # For MLP
+    n_estimators: int = 100 
+    input_size: int = 128  
+    hidden_size: int = 64  
+    output_size: int = 3  
     custom: dict = field(default_factory=dict)
 
 @dataclass

@@ -18,8 +18,6 @@
 
 
 
-
-
 | Title | Author | Organization | MLTech | TargetMaterial | ResearchObjective | OpenReviewLink | CodeAvailable |
 |-------|---------|-------------|--------|---------------|------------------|----------------|--------------|
 | 🌟 Scientific Knowledge Graph and Ontology Generation using Open Large Language Models | Oragno, Alexandra, et al. | N/A | Language_Model | General materials domain | Generate scientific knowledge graphs and ontology from LLMs for materials research | N/A | N/A |

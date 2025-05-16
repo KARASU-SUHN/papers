@@ -90,4 +90,20 @@
 - **Introduces PLaID**, an LLM fine-tuned on Wyckoff-based text representations of crystals for stable crystal generation  
 - **Applies Direct Preference Optimization (DPO)** to align model outputs toward thermodynamically stable structures  
 - **Encodes symmetry constraints** directly into text, enabling the model to learn structural parameters implicitly  
-- **Achieves a 40% higher rate** of generating stable, unique, and novel structures compared to prior methods  
+- **Achieves a 40% higher rate** of generating stable, unique, and novel structures compared to prior methods
+- 
+
+### MLIP Arena: Advancing Fairness and Transparency in Machine Learning Interatomic Potentials via an Open, Accessible Benchmark Platform
+
+- **Introduces MLIP Arena**, a benchmark platform evaluating MLIPs on physics awareness, chemical reactivity, stability under extreme conditions, and predictive capabilities for thermodynamic properties.
+- **Highlights limitations** of existing benchmarks, such as data leakage and overreliance on error-based metrics tied to specific DFT references.
+- **Provides a reproducible framework** to guide MLIP development toward improved predictive accuracy and runtime efficiency while maintaining physical consistency.
+- **Offers a Python package and online leaderboard** available at [huggingface.co/spaces/atomind/mlip-arena](https://huggingface.co/spaces/atomind/mlip-arena).
+
+### Towards Fast, Specialized Machine Learning Force Fields: Distilling Foundation Models via Energy Hessians
+
+- **Proposes a distillation method** transferring knowledge from large MLFF foundation models to smaller, faster specialized models using energy Hessians  
+- **Trains student models** to match the Hessians of teacher models, ensuring accurate force predictions and energy conservation  
+- **Achieves up to 20× speedup** over foundation models while maintaining or exceeding their accuracy  
+- **Enables deployment** of efficient, physically consistent MLFFs tailored to specific chemical subsets  
+

@@ -1,109 +1,105 @@
-Good catch — that error means our earlier “wrapper **function**” named `run_inpaint` shadowed what `main.py` expects: a **module** called `run_inpaint` that has a function like `inpaint_dataset(...)`.
+Yes—you can run **micro237** and **micro860** in parallel from VS Code. The two key things:
 
-Let’s swap the wrapper for a **lazy-module shim**, so `run_inpaint.inpaint_dataset` works again and nothing heavy is imported until it’s actually used.
+1. give each run its **own GPU** (so they don’t fight), and
+2. make sure each run points `anns.json` at the **right PNG** before it starts.
 
-## 1) Fix `src/inpainting/__init__.py`
+Here’s a clean, safe way.
 
-Replace the entire file with this:
+---
 
-```python
-# src/inpainting/__init__.py
-# Expose submodules lazily so import-time doesn’t pull Tk/dotenv, etc.
+## A. Find the exact filenames to target
 
-import importlib
-import importlib.util as _iu
-
-class _LazyModule:
-    def __init__(self, relmod):
-        self._relmod = relmod
-        self._m = None
-    def _load(self):
-        if self._m is None:
-            self._m = importlib.import_module(self._relmod, __name__)
-        return self._m
-    def __getattr__(self, name):
-        return getattr(self._load(), name)
-
-# Prefer a submodule named "run_inpaint" if it exists; otherwise fall back to "inpaint".
-if _iu.find_spec(__name__ + ".run_inpaint") is not None:
-    run_inpaint = _LazyModule(".run_inpaint")
-else:
-    run_inpaint = _LazyModule(".inpaint")
-
-# If the code references run_inpaint_scalebars as a callable, keep this helper:
-def run_inpaint_scalebars(*args, **kwargs):
-    mod = importlib.import_module(".inpaint_scalebars", __name__)
-    return mod.run_inpaint_scalebars(*args, **kwargs)
-```
-
-## 2) (Recommended) Make `src/slicegan/__init__.py` lazy too
-
-This prevents PlotOptiX/.NET from loading unless you explicitly animate.
-
-```python
-# src/slicegan/__init__.py
-import importlib
-
-class _LazyModule:
-    def __init__(self, relmod):
-        self._relmod = relmod
-        self._m = None
-    def _load(self):
-        if self._m is None:
-            self._m = importlib.import_module(self._relmod, __name__)
-        return self._m
-    def __getattr__(self, name):
-        return getattr(self._load(), name)
-
-run_slicegan = _LazyModule(".run_slicegan")
-animations   = _LazyModule(".animations")   # imports PlotOptiX only if used
-```
-
-## 3) Keep the earlier small guard in `src/inpainting/util.py`
-
-(You already patched Tk; keep this at the top so missing packages don’t crash.)
-
-```python
-# tkinter optional
-try:
-    from tkinter import image_types
-except Exception:
-    image_types = [('PNG','*.png'),('JPEG','*.jpg;*.jpeg'),('TIFF','*.tif;*.tiff')]
-
-# dotenv optional
-try:
-    from dotenv import load_dotenv
-except Exception:
-    def load_dotenv(*a, **k): return False
-```
-
-## 4) Rerun headless (and fix the env var typo)
-
-You typed `T_OPA_PLATFORM`; it should be `QT_QPA_PLATFORM`.
+(So your filter matches the right entry.)
 
 ```bash
 # from repo root
-ls data/micrographs_png/000237.png  ||  ln -s micrographs_raw data/micrographs_png
+grep -nE '"data_path".*860\.png' data/prelabelled_anns.json | head
+grep -nE '"data_path".*237\.png' data/prelabelled_anns.json | head
+```
 
+Note the exact names (e.g., `000860.png`, `000237.png`). If your importer wrote to `micrographs_raw/`, add this once:
+
+```bash
+[ -d data/micrographs_png ] || ln -s micrographs_raw data/micrographs_png
+```
+
+---
+
+## B. Open **two terminals** in VS Code
+
+### Terminal 1 → micro237 on GPU 0 (A5000, for example)
+
+```bash
+# pin this process to physical GPU 0
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
+export CUDA_VISIBLE_DEVICES=0
 export MPLBACKEND=Agg
 export QT_QPA_PLATFORM=offscreen
 
-python main.py inpaint
-python main.py slicegan     # (skip animate for now)
+# use prelabels and run only 237 (skip PlotOptiX-heavy animate)
+cp data/prelabelled_anns.json data/anns.json
+python run_micro.py --query "000237.png" --steps inpaint slicegan
 ```
 
-## 5) Quick sanity check (optional)
+Wait until you see it print something like “training micro237” or the progress bar has started.
 
-Verify the shim now behaves like a module:
+### Terminal 2 → micro860 on GPU 1 (A6000)
+
+```bash
+# pin this process to physical GPU 1
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
+export CUDA_VISIBLE_DEVICES=1
+export MPLBACKEND=Agg
+export QT_QPA_PLATFORM=offscreen
+
+# now filter and run only 860 (this will rewrite anns.json for THIS process)
+cp data/prelabelled_anns.json data/anns.json
+python run_micro.py --query "000860.png" --steps inpaint slicegan
+```
+
+> Why this works: each Python process reads `data/anns.json` **at startup**. Once running, it doesn’t re-read it, so changing `anns.json` for the second terminal won’t affect the first. Outputs go to separate folders:
+>
+> * `data/inpaint_runs/micro237/...` and `data/slicegan_runs/...`
+> * `data/inpaint_runs/micro860/...` and `data/slicegan_runs/...`
+
+---
+
+## C. Verify which GPU each run is using
+
+In another terminal:
+
+```bash
+watch -n 0.5 nvidia-smi
+```
+
+You should see:
+
+* GPU 0 memory/util climbing for the **237** run
+* GPU 1 memory/util climbing for the **860** run
+
+If you want to double-check inside Python:
 
 ```bash
 python - <<'PY'
-from src.inpainting import run_inpaint
-print("type:", type(run_inpaint))
-print("has inpaint_dataset:", hasattr(run_inpaint, "inpaint_dataset"))
+import torch
+print("device_count =", torch.cuda.device_count())
+for i in range(torch.cuda.device_count()):
+    print(f"cuda:{i} ->", torch.cuda.get_device_name(i))
 PY
 ```
 
-You should see `has inpaint_dataset: True`. Then the pipeline should proceed without the AttributeError.
+---
 
-If the next error mentions a specific symbol, paste the first \~10 lines of the traceback and I’ll patch that spot, too.
+## D. Tips / gotchas
+
+* If `run_micro.py` says “no match” for 860, search the exact name first:
+
+  ```bash
+  grep -n "860.png" data/prelabelled_anns.json | head
+  ```
+
+  then use that exact string in `--query`.
+* Keep skipping `animate` unless you’ve installed PlotOptiX + Mono/.NET.
+* If you want to force **CPU** for one run: `export CUDA_VISIBLE_DEVICES=""` in that terminal (slower).
+
+Want me to drop a tiny script to make quick slice GIFs (no PlotOptiX) for both runs so you can visually compare 237 vs 860?

@@ -70,45 +70,118 @@ util_py.write_text(new, encoding="utf-8")
 print("[OK] Patched:", util_py)
 ```
 
-Run it:
 
-```bash
-python patch_tk_shim.py
+
+Yep—this is a Windows-only stdlib module. Something in your import chain is doing:
+
+```python
+from msilib.schema import Error
 ```
 
-You should see `[OK] Patched: src/inpainting/util.py`.
+On Linux (your Docker), `msilib` doesn’t exist, so you get that error. We can unblock you in two safe ways:
 
 ---
 
-## Now run the pipeline (still headless-safe)
+# ✅ Fix A (recommended first): stop importing GUI/packaging stuff at import-time
 
-If you already created `headless_run.py` earlier, use it; otherwise you can run `main.py` normally now that the Tk import is gone.
+Your trace still shows `src/inpainting/__init__.py` importing `util` eagerly. Replace that file with a **lazy wrapper** so `main.py import` doesn’t pull Tk/dotenv/msilib at import-time.
+
+**Overwrite `src/inpainting/__init__.py` with exactly this:**
+
+```python
+# src/inpainting/__init__.py
+# Lazy wrappers so importing this package doesn't pull GUI/Tk/dotenv/msilib deps.
+
+def run_inpaint(*args, **kwargs):
+    from .inpaint import run_inpaint as _run
+    return _run(*args, **kwargs)
+
+def run_inpaint_scalebars(*args, **kwargs):
+    from .inpaint_scalebars import run_inpaint_scalebars as _run
+    return _run(*args, **kwargs)
+```
+
+Then hard-guard the optional imports in `util.py` (keeps you headless-safe even when you do `inpaint`):
+
+**Edit `src/inpainting/util.py`:**
+
+```python
+# --- Tk shim (avoid hard dependency) ---
+try:
+    from tkinter import image_types  # some environments don't have tkinter
+except Exception:
+    image_types = [('PNG', '*.png'), ('JPEG', '*.jpg;*.jpeg'), ('TIFF', '*.tif;*.tiff')]
+
+# --- dotenv shim (optional) ---
+try:
+    from dotenv import load_dotenv
+except Exception:
+    def load_dotenv(*args, **kwargs):
+        return False
+```
+
+(Keep any other Tk imports behind try/except too if they exist, e.g., `filedialog`, etc.)
+
+Now run headless:
 
 ```bash
-# 1) Download micrographs into repo's data/
-python headless_run.py import
-# or: python main.py import
+export MPLBACKEND=Agg
+export QT_QPA_PLATFORM=offscreen
 
-# 2) Skip the GUI using the authors’ labels
-cp data/prelabelled_anns.json data/anns.json    # (Windows PowerShell: Copy-Item ...)
-
-# 3) Run ONLY the entry that ends with 000237.png
+python main.py import
+cp data/prelabelled_anns.json data/anns.json
 python run_micro.py --query "000237.png" --steps inpaint slicegan animate
 ```
 
-That should produce:
+---
 
-* Inpainted image for that entry under `data/final_images/`
-* A SliceGAN run folder under `data/slicegan_runs/...` with weights + GIF/MP4.
+# ✅ Fix B (quick universal shim): stub `msilib` locally
+
+If the error persists (some third-party lib insists on importing `msilib`), add a tiny **local stub** so the import succeeds. This doesn’t affect your training/rendering.
+
+From your repo root:
+
+```bash
+mkdir -p msilib
+printf "" > msilib/__init__.py
+cat > msilib/schema.py <<'PY'
+class Error(Exception):
+    pass
+PY
+```
+
+Because the current working directory is on `sys.path`, Python will import this stub instead of the (nonexistent) Windows module.
+
+Then rerun:
+
+```bash
+export MPLBACKEND=Agg
+export QT_QPA_PLATFORM=offscreen
+
+python main.py import
+cp data/prelabelled_anns.json data/anns.json
+python run_micro.py --query "000237.png" --steps inpaint slicegan animate
+```
 
 ---
 
-### If anything else still mentions `tkinter`
+## (Optional) Find the offender
 
-Run this quick search to spot any other hard Tk imports inside the repo:
+If you’re curious which file was importing `msilib`, this finds it:
 
 ```bash
-grep -RniE "tkinter|ImageTk|TkAgg" src || true
+grep -Rni "msilib" src $(python -c "import site,sys; print(' '.join(site.getsitepackages()+[site.getusersitepackages()]))") 2>/dev/null | head -n 20
 ```
 
-If something shows up (besides the line we just patched), tell me the file/line and I’ll give you a tiny shim for that too.
+If it’s inside the repo, we’ll patch that file instead of stubbing.
+
+---
+
+### Quick recap
+
+1. Make `inpainting/__init__.py` lazy (very important).
+2. Guard Tk/dotenv in `util.py`.
+3. If needed, add the `msilib` stub.
+4. Run headless with `MPLBACKEND=Agg` and `QT_QPA_PLATFORM=offscreen`.
+
+This combo removes all GUI/Windows-only dependencies from your path so you can finish **Option A** and run micro **000237** end-to-end.

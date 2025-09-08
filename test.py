@@ -157,4 +157,46 @@ def filter_and_write(src_obj, micro_id: str):
     n = len(out_obj) if isinstance(out_obj, list) else (len(next(iter(out_obj.values()))) if isinstance(out_obj, dict) and any(isinstance(v, list) for v in out_obj.values()) else len(out_obj))
     print(f"[OK] Wrote filtered annotations for micro {micro_id} → {ANNS} ({n} entry)")
 
-def run_s_
+def run_steps(steps):
+    for step in steps:
+        print(f"\n[RUN] python {MAIN.name} {step}")
+        rc = subprocess.run([sys.executable, str(MAIN), step]).returncode
+        if rc != 0:
+            sys.exit(f"[ERROR] Step '{step}' failed with exit code {rc}. Check logs above.")
+        print(f"[OK] Step '{step}' completed.")
+
+def main():
+    p = argparse.ArgumentParser(description="Filter microlib annotations to a single micro and run pipeline steps.")
+    p.add_argument("--id", default="237", help="Microstructure ID to run (default: 237).")
+    p.add_argument("--steps", nargs="+",
+                   default=["inpaint", "slicegan", "animate"],
+                   choices=["import", "preprocess", "inpaint", "slicegan", "animate"],
+                   help="Pipeline steps to run after filtering.")
+    p.add_argument("--list-ids", action="store_true", help="List detected IDs from annotations and exit.")
+    args = p.parse_args()
+
+    if not MAIN.exists():
+        sys.exit(f"[ERROR] main.py not found at {MAIN}. Run this from the repo root.")
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    src_path = PRELABELLED if PRELABELLED.exists() else ANNS
+    src_obj = load_json(src_path)
+    print(f"[INFO] Loaded annotations from: {src_path}")
+
+    if args.list_ids:
+        kind, acc = detect_container(src_obj)
+        if kind is None:
+            sys.exit("[ERROR] Could not detect a known structure in the annotations file.")
+        ids = extract_all_ids(kind, acc)
+        print(f"[INFO] Detected {len(ids)} candidate IDs (showing up to 200):")
+        for i, v in enumerate(ids[:200], 1):
+            print(f"  {i:3d}. {v}")
+        return
+
+    filter_and_write(src_obj, args.id)
+    run_steps(args.steps)
+    print("\n[DONE] Check data/final_images/ and data/slicegan_runs/ for outputs.")
+
+if __name__ == "__main__":
+    main()
+

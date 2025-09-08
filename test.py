@@ -1,11 +1,16 @@
-# run_micro.py  (robust version)
-# Usage:
-#   python run_micro.py                       # defaults to --id 237, steps: inpaint slicegan animate
+
+```python
+# run_micro.py  (search + inspect + filter)
+# Examples:
+#   python run_micro.py --inspect
+#   python run_micro.py --search 237
+#   python run_micro.py --query "spinodal"            # filter by substring match
+#   python run_micro.py --id 237                      # strict numeric/text id match
+#   python run_micro.py --query "237" --steps inpaint slicegan animate
 #   python run_micro.py --id 237 --steps import inpaint slicegan animate
-#   python run_micro.py --id 150 --steps inpaint slicegan
-#   python run_micro.py --list-ids            # just show detected IDs and exit
 
 import argparse, json, pathlib, re, shutil, subprocess, sys
+from typing import Any, Dict, Iterable, List, Tuple, Union
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent
 DATA_DIR = REPO_ROOT / "data"
@@ -13,41 +18,27 @@ PRELABELLED = DATA_DIR / "prelabelled_anns.json"
 ANNS = DATA_DIR / "anns.json"
 BACKUP = DATA_DIR / "anns.json.bak"
 MAIN = REPO_ROOT / "main.py"
-
 LIST_KEYS = ("items", "annotations", "microstructures", "anns", "data")
 
 def load_json(path: pathlib.Path):
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        sys.exit(f"[ERROR] Not found: {path}. Did you download/extract the data?")
+        sys.exit(f"[ERROR] Not found: {path}.")
     except json.JSONDecodeError as e:
         sys.exit(f"[ERROR] JSON decode failed for {path}: {e}")
 
 def detect_container(obj):
-    """
-    Return a tuple (kind, accessor) where:
-      kind in {"list", "dictmap", "dictlist"}
-      accessor:
-        - for list: returns the list itself
-        - for dictmap: returns dict (id->entry)
-        - for dictlist: (keyname, listref)
-    """
-    # raw list?
+    # returns (kind, accessor)
     if isinstance(obj, list):
         return "list", obj
-
     if isinstance(obj, dict):
-        # dict with a list under a known key?
         for k in LIST_KEYS:
             if k in obj and isinstance(obj[k], list):
                 return "dictlist", (k, obj[k])
-        # dict mapping id->entry?
-        # Heuristic: all values are dicts (or most)
         vals = list(obj.values())
         if vals and sum(isinstance(v, dict) for v in vals) / len(vals) > 0.7:
             return "dictmap", obj
-
     return None, None
 
 def stringify_id(v):
@@ -56,22 +47,44 @@ def stringify_id(v):
     except Exception:
         return str(v).strip()
 
-def match_entry(entry: dict, target_id: str) -> bool:
+def iter_entries(kind, acc) -> Iterable[Tuple[Union[int, str], Dict[str, Any]]]:
+    """Yield (key, entry_dict) across any supported container shape.
+       key is index for list/dictlist; original key for dictmap.
+    """
+    if kind == "list":
+        for i, e in enumerate(acc):
+            if isinstance(e, dict):
+                yield i, e
+    elif kind == "dictlist":
+        _, lst = acc
+        for i, e in enumerate(lst):
+            if isinstance(e, dict):
+                yield i, e
+    elif kind == "dictmap":
+        for k, v in acc.items():
+            if isinstance(v, dict):
+                yield k, v
+
+CAND_KEYS = ("id","micro_id","microID","name","slug","code","title","label","url")
+
+def entry_label(entry: Dict[str, Any]) -> str:
+    parts = []
+    for k in CAND_KEYS:
+        if k in entry:
+            val = entry[k]
+            if isinstance(val, (str, int)):
+                parts.append(f"{k}={val}")
+    # shorten
+    s = ", ".join(parts) if parts else "(no common id/name fields)"
+    return (s[:200] + "…") if len(s) > 200 else s
+
+def match_entry_by_id(entry: Dict[str, Any], target_id: str) -> bool:
     t = target_id.lower()
-    candidate_keys = ("id","micro_id","microID","name","slug","micro_name","code","title","label","url")
-    # direct field checks
-    for k in candidate_keys:
+    for k in CAND_KEYS:
         if k in entry:
             v = str(entry[k]).strip().lower()
             if v == t or v == f"micro{t}" or re.search(rf"(^|[^0-9]){re.escape(t)}([^0-9]|$)", v):
                 return True
-    # scan all strings as fallback
-    for v in entry.values():
-        if isinstance(v, str):
-            vv = v.lower()
-            if vv == t or vv == f"micro{t}" or re.search(rf"(^|[^0-9]){re.escape(t)}([^0-9]|$)", vv):
-                return True
-    # strict numeric check for common integer keys
     try:
         ti = int(target_id)
         for k in ("id","micro_id","microID"):
@@ -81,122 +94,179 @@ def match_entry(entry: dict, target_id: str) -> bool:
         pass
     return False
 
-def extract_all_ids(kind, accessor):
-    ids = []
-    if kind == "list":
-        for e in accessor:
-            if isinstance(e, dict):
-                for k in ("id","micro_id","microID","name","slug","code","title","label"):
-                    if k in e:
-                        ids.append(stringify_id(e[k]))
-                        break
-    elif kind == "dictlist":
-        _, lst = accessor
-        for e in lst:
-            if isinstance(e, dict):
-                for k in ("id","micro_id","microID","name","slug","code","title","label"):
-                    if k in e:
-                        ids.append(stringify_id(e[k]))
-                        break
-    elif kind == "dictmap":
-        ids = [stringify_id(k) for k in accessor.keys()]
-    return sorted(set(ids), key=lambda x: (len(x), x))
+def match_entry_by_query(entry: Dict[str, Any], query: str) -> bool:
+    q = query.lower()
+    for v in entry.values():
+        if isinstance(v, (str, int, float)):
+            if q in str(v).lower():
+                return True
+    return False
 
-def filter_and_write(src_obj, micro_id: str):
-    kind, acc = detect_container(src_obj)
-    if kind is None:
-        raise SystemExit("[ERROR] Unexpected JSON structure in annotations.\n"
-                         "Tip: run with --list-ids to see what I can detect.")
-
-    # backup existing anns.json
+def write_filtered(src_obj, kind, acc, selected: List[Tuple[Union[int,str], Dict[str,Any]]]):
+    if not selected:
+        sys.exit("[ERROR] Nothing selected to write.")
+    # backup
     if ANNS.exists():
         shutil.copy2(ANNS, BACKUP)
-        print(f"[INFO] Backed up existing {ANNS} → {BACKUP}")
-
-    out_obj = None
+        print(f"[INFO] Backed up {ANNS} → {BACKUP}")
 
     if kind == "list":
-        filtered = [e for e in acc if isinstance(e, dict) and match_entry(e, micro_id)]
-        if not filtered:
-            raise SystemExit(f"[ERROR] Could not find any entry matching '{micro_id}'. "
-                             f"Try --list-ids to view candidates.")
-        out_obj = filtered  # preserve top-level list
-
+        out = [e for _, e in selected]
     elif kind == "dictlist":
-        key, lst = acc
-        filtered = [e for e in lst if isinstance(e, dict) and match_entry(e, micro_id)]
-        if not filtered:
-            raise SystemExit(f"[ERROR] Could not find any entry matching '{micro_id}'. "
-                             f"Try --list-ids to view candidates.")
-        out_obj = dict(src_obj)  # shallow copy
-        out_obj[key] = filtered  # preserve same wrapping key
-
+        key, _ = acc
+        out = dict(src_obj)  # shallow copy of wrapper
+        out[key] = [e for _, e in selected]
     elif kind == "dictmap":
-        # try by exact key first
-        key_hit = None
-        # allow both '237' and int 237 keys
-        for k in list(acc.keys()):
-            if stringify_id(k) == stringify_id(micro_id):
-                key_hit = k
-                break
-        if key_hit is not None:
-            out_obj = {key_hit: acc[key_hit]}
-        else:
-            # fall back: search values
-            hit_items = []
-            for k, v in acc.items():
-                if isinstance(v, dict) and match_entry(v, micro_id):
-                    hit_items.append((k, v))
-            if not hit_items:
-                raise SystemExit(f"[ERROR] Could not find any entry matching '{micro_id}'. "
-                                 f"Try --list-ids to view candidates.")
-            out_obj = {k: v for k, v in hit_items}
+        out = {k: e for k, e in selected}
+    else:
+        sys.exit("[ERROR] Unknown container kind after selection.")
 
-    ANNS.write_text(json.dumps(out_obj, indent=2, ensure_ascii=False), encoding="utf-8")
-    # Count entries written
-    n = len(out_obj) if isinstance(out_obj, list) else (len(next(iter(out_obj.values()))) if isinstance(out_obj, dict) and any(isinstance(v, list) for v in out_obj.values()) else len(out_obj))
-    print(f"[OK] Wrote filtered annotations for micro {micro_id} → {ANNS} ({n} entry)")
+    ANNS.write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
+    count = len(selected)
+    print(f"[OK] Wrote filtered annotations → {ANNS} ({count} entry{'s' if count!=1 else ''})")
 
-def run_steps(steps):
+def run_steps(steps: List[str]):
     for step in steps:
         print(f"\n[RUN] python {MAIN.name} {step}")
         rc = subprocess.run([sys.executable, str(MAIN), step]).returncode
         if rc != 0:
-            sys.exit(f"[ERROR] Step '{step}' failed with exit code {rc}. Check logs above.")
+            sys.exit(f"[ERROR] Step '{step}' failed with exit code {rc}.")
         print(f"[OK] Step '{step}' completed.")
 
 def main():
-    p = argparse.ArgumentParser(description="Filter microlib annotations to a single micro and run pipeline steps.")
-    p.add_argument("--id", default="237", help="Microstructure ID to run (default: 237).")
-    p.add_argument("--steps", nargs="+",
-                   default=["inpaint", "slicegan", "animate"],
-                   choices=["import", "preprocess", "inpaint", "slicegan", "animate"],
-                   help="Pipeline steps to run after filtering.")
-    p.add_argument("--list-ids", action="store_true", help="List detected IDs from annotations and exit.")
-    args = p.parse_args()
+    ap = argparse.ArgumentParser(description="Search/inspect microlib annotations and run a subset pipeline.")
+    ap.add_argument("--inspect", action="store_true", help="Print top-level structure and a few example entries, then exit.")
+    ap.add_argument("--list-ids", action="store_true", help="List detected candidate IDs (best-effort), then exit.")
+    ap.add_argument("--search", type=str, help="Substring search across all fields. Prints matches then exits.")
+    ap.add_argument("--id", type=str, help="Strict match by id/name/slug/etc. (e.g., 237).")
+    ap.add_argument("--query", type=str, help="Filter by substring (e.g., '237' or 'ferrite'). If multiple, keeps the first match.")
+    ap.add_argument("--steps", nargs="+", default=["inpaint", "slicegan", "animate"],
+                    choices=["import", "preprocess", "inpaint", "slicegan", "animate"])
+    args = ap.parse_args()
 
     if not MAIN.exists():
-        sys.exit(f"[ERROR] main.py not found at {MAIN}. Run this from the repo root.")
+        sys.exit(f"[ERROR] main.py not found at {MAIN}. Run from repo root.")
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     src_path = PRELABELLED if PRELABELLED.exists() else ANNS
-    src_obj = load_json(src_path)
-    print(f"[INFO] Loaded annotations from: {src_path}")
+    src = load_json(src_path)
+    kind, acc = detect_container(src)
+    if kind is None:
+        sys.exit("[ERROR] Unexpected annotations structure. Try --inspect and share the output.")
+
+    print(f"[INFO] Loaded from {src_path} (kind={kind}).")
+
+    if args.inspect:
+        print("[INSPECT] First 3 entries (label fields):")
+        for i, (k, e) in enumerate(iter_entries(kind, acc)):
+            print(f"  - key={k!r}: {entry_label(e)}")
+            if i >= 2: break
+        return
 
     if args.list_ids:
-        kind, acc = detect_container(src_obj)
-        if kind is None:
-            sys.exit("[ERROR] Could not detect a known structure in the annotations file.")
-        ids = extract_all_ids(kind, acc)
-        print(f"[INFO] Detected {len(ids)} candidate IDs (showing up to 200):")
+        ids = []
+        for k, e in iter_entries(kind, acc):
+            # collect a single best id/name
+            best = None
+            for cand in ("id","micro_id","microID","name","slug","code","title","label"):
+                if cand in e:
+                    best = stringify_id(e[cand])
+                    break
+            ids.append(best if best is not None else f"[key={k}]")
+        print(f"[INFO] Detected {len(ids)} candidates (showing up to 200):")
         for i, v in enumerate(ids[:200], 1):
             print(f"  {i:3d}. {v}")
         return
 
-    filter_and_write(src_obj, args.id)
+    if args.search:
+        q = args.search.strip().lower()
+        print(f"[SEARCH] matches containing '{q}':")
+        shown = 0
+        for k, e in iter_entries(kind, acc):
+            label = entry_label(e).lower()
+            if q in label or any(isinstance(v, str) and q in v.lower() for v in e.values()):
+                print(f"  - key={k!r}: {entry_label(e)}")
+                shown += 1
+                if shown >= 200:
+                    print("  [truncated at 200 matches]")
+                    break
+        if shown == 0:
+            print("  (no matches)")
+        return
+
+    # Selection: by --id if provided; else by --query (substring); else default to "237" as id
+    selected: List[Tuple[Union[int,str], Dict[str,Any]]] = []
+    target_id = args.id if args.id else "237"
+    if args.id:
+        for k, e in iter_entries(kind, acc):
+            if match_entry_by_id(e, args.id):
+                selected.append((k, e))
+                break
+        if not selected:
+            sys.exit(f"[ERROR] Could not find any entry matching '--id {args.id}'. Try --search '{args.id}'.")
+    else:
+        q = args.query if args.query else "237"
+        for k, e in iter_entries(kind, acc):
+            if match_entry_by_query(e, q):
+                selected.append((k, e))
+                break
+        if not selected:
+            sys.exit(f"[ERROR] Could not find any entry with substring '{q}'. "
+                     f"Try: python run_micro.py --inspect  and  python run_micro.py --search {q}")
+
+    write_filtered(src, kind, acc, selected)
     run_steps(args.steps)
-    print("\n[DONE] Check data/final_images/ and data/slicegan_runs/ for outputs.")
+    print("\n[DONE] Check data/final_images/ and data/slicegan_runs/.")
 
 if __name__ == "__main__":
     main()
+```
+
+### How to use (quick)
+
+1. Inspect structure and see sample labels:
+
+```
+python run_micro.py --inspect
+```
+
+2. Search for anything containing “237” across all fields:
+
+```
+python run_micro.py --search 237
+```
+
+This prints lines like:
+
+```
+- key=...: id=..., name=..., slug=..., url=...
+```
+
+Pick the unique string that clearly identifies your target (maybe it’s called “micro237”, or the number is only in the URL, or the dataset uses names instead of numbers).
+
+3. Run with the thing that matches:
+
+* If you saw a clean ID/name like `name=Micro 237`, try:
+
+```
+python run_micro.py --id 237
+```
+
+* If the number only appears inside another field (e.g., part of a URL or title), use a substring query:
+
+```
+python run_micro.py --query "237"
+```
+
+This writes a filtered `data/anns.json` and then runs `inpaint → slicegan → animate` for that single entry.
+
+If it still can’t find the entry, please run:
+
+```
+python run_micro.py --inspect
+python run_micro.py --search 237
+```
+
+and paste the printed lines (just a few). I’ll adapt the matcher to your file immediately.
+
 
